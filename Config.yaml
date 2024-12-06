@@ -1,0 +1,69 @@
+tables:
+  sales:
+    description: "Contains daily sales transactions data including product information, customer details, and revenue metrics"
+    create_statement: |
+      CREATE TABLE sales (
+          sale_id INT PRIMARY KEY,
+          date DATE NOT NULL,
+          product_id INT NOT NULL,
+          customer_id INT NOT NULL,
+          quantity INT NOT NULL,
+          unit_price DECIMAL(10,2) NOT NULL,
+          total_amount DECIMAL(10,2) NOT NULL,
+          region VARCHAR(50) NOT NULL,
+          FOREIGN KEY (product_id) REFERENCES products(product_id),
+          FOREIGN KEY (customer_id) REFERENCES customers(customer_id)
+      )
+    sample_questions:
+      - "What are the total sales for each region?"
+      - "Show me daily sales trends"
+      - "Which products have the highest revenue?"
+
+  products:
+    description: "Product catalog with details about each product including categories, prices, and inventory information"
+    create_statement: |
+      CREATE TABLE products (
+          product_id INT PRIMARY KEY,
+          product_name VARCHAR(100) NOT NULL,
+          category VARCHAR(50) NOT NULL,
+          base_price DECIMAL(10,2) NOT NULL,
+          current_inventory INT NOT NULL,
+          supplier_id INT NOT NULL,
+          FOREIGN KEY (supplier_id) REFERENCES suppliers(supplier_id)
+      )
+    sample_questions:
+      - "What are our top selling products?"
+      - "Show me product inventory by category"
+      - "Which products need restocking?"
+
+  customers:
+    description: "Customer database containing demographic information and purchase history"
+    create_statement: |
+      CREATE TABLE customers (
+          customer_id INT PRIMARY KEY,
+          name VARCHAR(100) NOT NULL,
+          email VARCHAR(100) UNIQUE NOT NULL,
+          join_date DATE NOT NULL,
+          segment VARCHAR(50),
+          total_purchases DECIMAL(10,2) DEFAULT 0
+      )
+    sample_questions:
+      - "Who are our top customers by purchase value?"
+      - "Show me customer segments distribution"
+      - "What's the customer growth trend?"
+
+  suppliers:
+    description: "Information about product suppliers including contact details and supply chain metrics"
+    create_statement: |
+      CREATE TABLE suppliers (
+          supplier_id INT PRIMARY KEY,
+          supplier_name VARCHAR(100) NOT NULL,
+          contact_email VARCHAR(100) NOT NULL,
+          country VARCHAR(50) NOT NULL,
+          reliability_score DECIMAL(3,2),
+          active BOOLEAN DEFAULT true
+      )
+    sample_questions:
+      - "Which suppliers have the best reliability scores?"
+      - "Show me active suppliers by country"
+      - "What's our supplier distribution by region?"
