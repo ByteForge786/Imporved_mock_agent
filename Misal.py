@@ -86,3 +86,65 @@ class ChatUI:
         except Exception as e:
             logger.error(f"Session state initialization error: {traceback.format_exc()}")
             raise InitializationError("Failed to initialize chat session")
+
+
+class ChatInterface:
+    def __init__(self):
+        self.initialize_session_state()
+        
+    def process_message(self, message: str):
+        """Process a new message"""
+        try:
+            st.session_state.processing = True
+            
+            # Add user message
+            st.session_state.messages.append({"role": "user", "content": message})
+
+            # First check if this is a conversational query
+            conv_result = st.session_state.agent.tools["conversation"].execute(query=message)
+            
+            if conv_result["status"] == "success" and conv_result.get("type") == "conversation":
+                # It's a conversational response (like greeting)
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": conv_result["response"]
+                })
+                return
+            
+            # If not conversation, process with full agent pipeline
+            result = st.session_state.agent.process_query(message)
+            
+            if result["status"] == "success":
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": result
+                })
+            elif result["status"] == "error":
+                st.error(result.get("error", "An error occurred"))
+            
+        except Exception as e:
+            logger.error(f"Error processing message: {traceback.format_exc()}")
+            st.error(f"Error processing message: {str(e)}")
+        finally:
+            st.session_state.processing = False
+
+    def display_current_state(self, state: Dict[str, Any]):
+        """Display the current state of the agent"""
+        if not isinstance(state, dict):
+            return
+            
+        status = state.get("status", "")
+        
+        if status == "starting":
+            st.info("🚀 Starting to process your query...")
+            
+        elif status == "processing":
+            current_action = state.get("current_action", {})
+            if isinstance(current_action, dict):
+                thought = current_action.get("thought", "")
+                if thought:
+                    st.markdown(f"""
+                    <div class="tool-execution">
+                        🤔 <b>Thinking:</b> {thought}
+                    </div>
+                    """, unsafe_allow_html=True)
