@@ -6,351 +6,252 @@ import yaml
 import traceback
 from queue import Queue
 from threading import Event
-from sql_agent import SQLReActAgent
+from sql_agent import SQLReActAgent, UICallback
 import logging
 import plotly.express as px
-import plotly.graph_objects as go
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('ui.log'),
-        logging.StreamHandler()
-    ]
+    handlers=[logging.FileHandler('ui.log'), logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
 
-# Initialize Streamlit page configuration
-st.set_page_config(
-    page_title="SQL Analytics Assistant",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# Page config
+st.set_page_config(page_title="SQL Assistant", page_icon="🤖", layout="wide")
 
-# Custom CSS for professional UI
+# Custom CSS
 st.markdown("""
-    <style>
-    .stApp {
-        background-color: #f8f9fa;
-    }
-    .main {
-        padding: 1rem 2rem;
-    }
-    .stAlert {
-        padding: 12px;
-        margin: 12px 0;
+<style>
+    .agent-state { 
+        background-color: #f0f2f6;
         border-radius: 8px;
+        padding: 10px;
+        margin: 5px 0;
     }
-    .sql-box {
-        background-color: #f8f9fa;
-        padding: 1.2rem;
-        border-radius: 8px;
-        font-family: 'Monaco', 'Courier New', monospace;
-        border: 1px solid #e9ecef;
-    }
-    .thought-box {
-        background-color: #fff;
-        padding: 1.2rem;
-        border-radius: 8px;
-        margin: 10px 0;
-        border-left: 4px solid #3b71ca;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }
-    .chat-message {
-        padding: 1.2rem;
-        border-radius: 8px;
-        margin: 12px 0;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-        max-width: 80%;
+    .tool-execution {
+        background-color: #e8f0fe;
+        border-left: 3px solid #1976d2;
+        padding: 10px;
+        margin: 5px 0;
     }
     .user-message {
-        background-color: #e7f3fe;
-        margin-left: 20%;
-        border: 1px solid #cce5ff;
+        background-color: #e3f2fd;
+        border-radius: 15px;
+        padding: 15px;
+        margin: 5px 0 5px auto;
+        max-width: 80%;
     }
     .assistant-message {
-        background-color: #ffffff;
-        margin-right: 20%;
-        border: 1px solid #e9ecef;
+        background-color: #f5f5f5;
+        border-radius: 15px;
+        padding: 15px;
+        margin: 5px auto 5px 0;
+        max-width: 80%;
     }
-    .processing-status {
-        padding: 0.8rem;
+    .status-indicator {
+        padding: 5px 10px;
+        border-radius: 15px;
+        font-size: 14px;
+        font-weight: 500;
+    }
+    .sql-code {
+        background-color: #1e1e1e;
+        color: #d4d4d4;
+        padding: 10px;
+        border-radius: 5px;
+        font-family: 'Courier New', monospace;
+    }
+    .viz-container {
+        border: 1px solid #e0e0e0;
         border-radius: 8px;
-        margin: 8px 0;
-        background-color: #fff3cd;
-        border: 1px solid #ffeeba;
-    }
-    .result-box {
+        padding: 10px;
         margin: 10px 0;
-        padding: 1.2rem;
-        border-radius: 8px;
-        background-color: white;
-        border: 1px solid #e9ecef;
     }
-    </style>
+</style>
 """, unsafe_allow_html=True)
 
-class ChatUI:
+class ChatInterface:
     def __init__(self):
         self.initialize_session_state()
-        self.clarification_queue = Queue()
-        self.clarification_event = Event()
-        
+
     def initialize_session_state(self):
-        """Initialize session state with error handling"""
-        try:
-            if "messages" not in st.session_state:
-                st.session_state.messages = []
-            if "agent" not in st.session_state:
-                st.session_state.agent = SQLReActAgent(
-                    "schema.yaml",
-                    clarification_queue=self.clarification_queue,
-                    clarification_event=self.clarification_event
-                )
-            if "processing" not in st.session_state:
-                st.session_state.processing = False
-                
-        except Exception as e:
-            logger.error(f"Session state initialization error: {traceback.format_exc()}")
-            raise InitializationError("Failed to initialize chat session")
+        """Initialize the session state variables"""
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
+        if "feedback_queue" not in st.session_state:
+            st.session_state.feedback_queue = Queue()
+        if "feedback_event" not in st.session_state:
+            st.session_state.feedback_event = Event()
+        if "processing" not in st.session_state:
+            st.session_state.processing = False
+        if "current_state" not in st.session_state:
+            st.session_state.current_state = {}
+        if "agent" not in st.session_state:
+            # Initialize agent with UI callback
+            st.session_state.agent = SQLReActAgent(
+                schema_path="schema.yaml",
+                ui_callback=UICallback(self.update_ui_state),
+                feedback_queue=st.session_state.feedback_queue,
+                feedback_event=st.session_state.feedback_event
+            )
 
-    def display_message(self, message: Dict[str, Any], realtime: bool = False):
-        """Display chat messages"""
-        try:
-            role = message.get("role", "assistant")
-            content = message.get("content", "")
-            
-            if isinstance(content, str):
-                st.markdown(
-                    f"""<div class="chat-message {'user-message' if role == 'user' else 'assistant-message'}">
-                        {content}</div>""",
-                    unsafe_allow_html=True
-                )
-            elif isinstance(content, dict):
-                self.display_analysis_result(content, realtime)
-                
-        except Exception as e:
-            logger.error(f"Message display error: {traceback.format_exc()}")
-            st.error("Error displaying message")
+    def update_ui_state(self, state: Dict[str, Any]):
+        """Callback to update UI state"""
+        st.session_state.current_state = state
+        self.display_current_state(state)
 
-    def display_analysis_result(self, result: Dict[str, Any], realtime: bool = False):
-        """Display analysis results with real-time updates"""
-        try:
-            if result.get("status") != "success":
-                st.error(f"Analysis failed: {result.get('error', 'Unknown error')}")
-                return
-
-            for action in result.get("actions", []):
-                if realtime:
-                    # For real-time updates, use empty placeholders
-                    status_placeholder = st.empty()
-                    result_placeholder = st.empty()
-                    
-                    with status_placeholder:
-                        st.markdown(f"""<div class="processing-status">
-                            🔄 {action['tool'].replace('_', ' ').title()} in progress...</div>""",
-                            unsafe_allow_html=True)
-                    
-                    with result_placeholder:
-                        self.display_tool_result(action)
-                        
-                else:
-                    # For final results, use normal display
-                    with st.expander(f"📊 {action['tool'].replace('_', ' ').title()}", expanded=True):
-                        self.display_tool_result(action)
-
-        except Exception as e:
-            logger.error(f"Analysis display error: {traceback.format_exc()}")
-            st.error("Error displaying analysis results")
-
-    def display_tool_result(self, action: Dict[str, Any]):
-        """Display individual tool results"""
-        # Display thought process
-        if action.get("thought"):
-            st.markdown(f"""<div class="thought-box">
-                <strong>Analysis:</strong><br>{action['thought']}</div>""",
-                unsafe_allow_html=True)
-
-        tool_result = action.get("result", {})
+    def display_current_state(self, state: Dict[str, Any]):
+        """Display the current state of the agent"""
+        status = state.get("status")
         
-        # Display based on tool type
-        if action["tool"] == "schema_lookup":
-            self.display_schema_info(tool_result)
-        elif action["tool"] == "sql_generation":
-            self.display_sql_info(tool_result)
-        elif action["tool"] == "sql_validation":
-            self.display_validation_info(tool_result)
-        elif action["tool"] == "db_execution":
-            self.display_execution_results(tool_result)
+        if status == "starting":
+            st.info("🚀 Starting to process your query...")
+            
+        elif status == "processing":
+            current_action = state.get("current_action", {})
+            if thought := current_action.get("thought"):
+                st.markdown(f"""
+                <div class="tool-execution">
+                    🤔 <b>Thinking:</b> {thought}
+                </div>
+                """, unsafe_allow_html=True)
+                
+            if result := current_action.get("result"):
+                self.display_tool_result(current_action["tool"], result)
+                
+        elif status == "waiting_feedback":
+            question = state.get("question")
+            st.warning(f"🤔 {question}")
+            response = st.text_input("Your response:", key=f"feedback_{len(st.session_state.messages)}")
+            if st.button("Submit", key=f"submit_{len(st.session_state.messages)}"):
+                st.session_state.feedback_queue.put(response)
+                st.session_state.feedback_event.set()
 
-    def display_schema_info(self, result: Dict[str, Any]):
-        """Display schema information"""
-        if relevant_tables := result.get("relevant_tables"):
-            cols = st.columns(len(relevant_tables))
-            for idx, table in enumerate(relevant_tables):
-                with cols[idx]:
+    def display_tool_result(self, tool_name: str, result: Dict[str, Any]):
+        """Display results from different tools"""
+        if tool_name == "schema_lookup":
+            if tables := result.get("relevant_tables"):
+                cols = st.columns(len(tables))
+                for idx, table in enumerate(tables):
+                    with cols[idx]:
+                        st.markdown(f"""
+                        <div class="agent-state">
+                            <h4>{table['name']}</h4>
+                            <p><b>Relevance:</b> {table['relevance']}</p>
+                            <p><b>Columns:</b> {', '.join(table['columns'])}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+        elif tool_name == "sql_generation":
+            if sql := result.get("sql"):
+                st.markdown(f"""
+                <div class="sql-code">
+                    {sql}
+                </div>
+                """, unsafe_allow_html=True)
+                if explanation := result.get("explanation"):
+                    st.markdown(f"**Explanation:**\n{explanation}")
+                    
+        elif tool_name == "db_execution":
+            if data := result.get("data"):
+                df = pd.DataFrame(data)
+                st.dataframe(df, use_container_width=True)
+                if metadata := result.get("metadata"):
                     st.markdown(f"""
-                    <div class="result-box">
-                        <h4>{table['name']}</h4>
-                        <p><strong>Relevance:</strong> {table['relevance']}</p>
-                        <p><strong>Description:</strong> {table['description']}</p>
-                        <p><strong>Columns:</strong> {', '.join(table['columns'])}</p>
+                    <div class="agent-state">
+                        <p><b>Rows:</b> {metadata['row_count']}</p>
+                        <p><b>Columns:</b> {', '.join(metadata['columns'])}</p>
                     </div>
                     """, unsafe_allow_html=True)
+                    
+        elif tool_name == "python_executor":
+            if fig_data := result.get("figure"):
+                with st.container():
+                    st.markdown("""<div class="viz-container">""", unsafe_allow_html=True)
+                    st.plotly_chart(px.Figure().from_json(fig_data))
+                    st.markdown("</div>", unsafe_allow_html=True)
 
-    def display_sql_info(self, result: Dict[str, Any]):
-        """Display SQL query information"""
-        if sql := result.get("sql"):
-            st.code(sql, language="sql")
-            if explanation := result.get("explanation"):
-                st.markdown(f"""<div class="thought-box">
-                    <strong>Query Explanation:</strong><br>{explanation}</div>""",
-                    unsafe_allow_html=True)
-
-    def display_validation_info(self, result: Dict[str, Any]):
-        """Display validation results"""
-        is_safe = result.get("is_safe")
-        if is_safe is not None:
-            st.markdown(f"""
-            <div class="result-box">
-                <h4>Validation Results</h4>
-                <p>Status: {"✅ Safe to execute" if is_safe else "❌ Issues found"}</p>
-                {f"<strong>Issues:</strong><ul>{''.join([f'<li>{issue}</li>' for issue in result.get('issues', [])])}</ul>" if result.get('issues') else ""}
-                {f"<strong>Feedback:</strong><br>{result.get('feedback', '')}" if result.get('feedback') else ""}
-            </div>
-            """, unsafe_allow_html=True)
-
-    def display_execution_results(self, result: Dict[str, Any]):
-        """Display query results"""
-        if data := result.get("data"):
-            df = pd.DataFrame(data)
-            st.dataframe(df, use_container_width=True)
+    def process_message(self, message: str):
+        """Process a new message"""
+        try:
+            st.session_state.processing = True
             
-            if metadata := result.get("metadata"):
+            # Add user message
+            st.session_state.messages.append({"role": "user", "content": message})
+            
+            # Process with agent
+            result = st.session_state.agent.process_query(message)
+            
+            # Add response
+            st.session_state.messages.append({
+                "role": "assistant", 
+                "content": result.get("response") if result.get("type") == "conversation" else result
+            })
+            
+        except Exception as e:
+            logger.error(f"Error processing message: {traceback.format_exc()}")
+            st.error(f"Error processing message: {str(e)}")
+        finally:
+            st.session_state.processing = False
+
+    def display_chat_history(self):
+        """Display chat history"""
+        for message in st.session_state.messages:
+            role = message["role"]
+            content = message["content"]
+            
+            if isinstance(content, str):
                 st.markdown(f"""
-                <div class="result-box">
-                    <h4>Query Statistics</h4>
-                    <ul>
-                        <li>Rows: {metadata['row_count']}</li>
-                        <li>Columns: {', '.join(metadata['columns'])}</li>
-                        <li>Execution Time: {metadata.get('execution_time', 'N/A')}</li>
-                    </ul>
+                <div class="{role}-message">
+                    {content}
+                </div>
+                """, unsafe_allow_html=True)
+            elif isinstance(content, dict):
+                st.markdown(f"""
+                <div class="{role}-message">
+                    {content.get('response', json.dumps(content, indent=2))}
                 </div>
                 """, unsafe_allow_html=True)
 
-    def handle_user_input(self, user_input: str):
-        """Process user input with real-time updates"""
-        try:
-            # Add user message
-            st.session_state.messages.append({
-                "role": "user",
-                "content": user_input
-            })
-            
-            # Create placeholders for real-time updates
-            status_placeholder = st.empty()
-            result_placeholder = st.empty()
-            
-            def update_ui_callback(state: Dict[str, Any]):
-                """Callback for real-time UI updates"""
-                status = state.get("status")
-                
-                if status == "waiting_feedback":
-                    # Show clarification request
-                    with status_placeholder:
-                        st.info(state.get("question"))
-                        clarification = st.text_input(
-                            "Your response:",
-                            key=f"clarification_{len(st.session_state.messages)}"
-                        )
-                        if st.button("Submit", key=f"submit_{len(st.session_state.messages)}"):
-                            self.clarification_queue.put(clarification)
-                            self.clarification_event.set()
-                
-                elif status == "processing":
-                    # Show current action
-                    with status_placeholder:
-                        if thought := state.get("current_action", {}).get("thought"):
-                            st.markdown(f"""<div class="processing-status">
-                                🔄 {thought}</div>""", unsafe_allow_html=True)
-                    
-                    # Show partial results
-                    with result_placeholder:
-                        if result := state.get("current_action", {}).get("result"):
-                            self.display_analysis_result({"status": "success", "actions": [state["current_action"]]}, realtime=True)
-                
-                elif status == "completed":
-                    status_placeholder.empty()
-                    result_placeholder.empty()
-
-            # Process query with real-time updates
-            st.session_state.processing = True
-            result = st.session_state.agent.process_query(
-                user_input,
-                callback=update_ui_callback
-            )
-            st.session_state.processing = False
-            
-            # Add final response
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": result
-            })
-            
-        except Exception as e:
-            logger.error(f"Query processing error: {traceback.format_exc()}")
-            st.error("Error processing your request. Please try again.")
-
-    def show_chat_interface(self):
-        """Display main chat interface"""
-        st.title("📊 SQL Analytics Assistant")
+    def show_interface(self):
+        """Display the main interface"""
+        st.title("🤖 SQL Analytics Assistant")
+        
+        # Main chat container
+        chat_container = st.container()
         
         # Display chat history
-        for message in st.session_state.messages:
-            self.display_message(message)
+        with chat_container:
+            self.display_chat_history()
         
-        # Chat input
+        # Input area
         if not st.session_state.processing:
-            if user_input := st.chat_input("Ask about your data..."):
-                self.handle_user_input(user_input)
+            user_input = st.chat_input("Ask me anything about your data...")
+            if user_input:
+                self.process_message(user_input)
+                st.experimental_rerun()
         
-        # Sidebar
-        self.show_sidebar()
-
-    def show_sidebar(self):
-        """Display sidebar with controls and schema info"""
+        # Sidebar with schema info and controls
         with st.sidebar:
-            st.markdown("### Controls")
+            st.subheader("📊 Database Schema")
+            try:
+                with open("schema.yaml") as f:
+                    schema = yaml.safe_load(f)
+                    for table in schema["tables"]:
+                        st.markdown(f"**{table}**")
+            except Exception as e:
+                st.error("Failed to load schema")
+            
             if st.button("🗑️ Clear Chat"):
                 st.session_state.messages = []
-                st.rerun()
-            
-            st.markdown("### Available Data")
-            try:
-                with open("schema.yaml", "r") as f:
-                    schema = yaml.safe_load(f)
-                    for table, info in schema["tables"].items():
-                        with st.expander(f"📋 {table}"):
-                            st.write(f"**Description:** {info['description']}")
-                            if samples := info.get("sample_questions"):
-                                st.write("**Example Questions:**")
-                                for q in samples:
-                                    st.write(f"- {q}")
-            except Exception as e:
-                logger.error(f"Schema loading error: {traceback.format_exc()}")
-                st.error("Schema information unavailable")
-
-class InitializationError(Exception):
-    """Custom exception for initialization errors"""
-    pass
+                st.experimental_rerun()
 
 def main():
     try:
-        chat_ui = ChatUI()
-        chat_ui.show_chat_interface()
+        chat_interface = ChatInterface()
+        chat_interface.show_interface()
     except Exception as e:
         logger.error(f"Application error: {traceback.format_exc()}")
         st.error("An error occurred. Please refresh the page.")
